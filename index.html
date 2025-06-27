@@ -397,6 +397,7 @@ function init() {
     (gltf) => {
       crjModel = gltf.scene;
       crjModel.position.copy(target);
+      crjModel.rotation.y = Math.PI / 2;
       crjModel.add(new THREE.AxesHelper(5));
       scene.add(crjModel);
       modelLoaded = true;
@@ -428,7 +429,7 @@ function init() {
       const mat = new THREE.MeshStandardMaterial({ map: texture, side: THREE.DoubleSide });
       const geo = new THREE.PlaneGeometry(tileWorldSize, tileWorldSize);
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.rotation.x = -Math.PI / 2;
+      mesh.rotation.x = Math.PI / 2;
 
       // Initially hide tiles offscreen:
       mesh.position.set(0, -1000, 0);
@@ -541,7 +542,7 @@ function animate(time = 0) {
 
   updateCameraPosition();
 
-  planePos.y += delta * 5;
+  planePos.x += delta * 5;
 
   let offsetX = planePos.x / tileWorldSize;
   let offsetY = planePos.y / tileWorldSize;
@@ -572,7 +573,7 @@ function animate(time = 0) {
       for (let col = 0; col < gridSize; col++) {
         const tile = tileGrid[row][col];
         const x = (tile.tileX - centerTileX - offsetX) * tileWorldSize + centerOffset;
-        const z = (tile.tileY - centerTileY - offsetY) * tileWorldSize + centerOffset;
+        const z = -(tile.tileY - centerTileY - offsetY) * tileWorldSize + centerOffset;
         tile.mesh.position.set(x, 0, z);
       }
     }
