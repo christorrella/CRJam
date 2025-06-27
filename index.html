@@ -129,6 +129,8 @@ let [lat, lon] = default_locations.Irvine;
 let { tileX: baseTileX, tileY: baseTileY } = latLonToTileXY(lat, lon, arcgisApiTileZoomLevel);
 let scene, camera, renderer, crjModel;
 
+let heading = THREE.Math.degToRad(90);
+
 let tileGrid = [];
 let planePos = { x: 0, y: 0 };
 let centerTileX = baseTileX;
@@ -196,6 +198,7 @@ function playIntroAndLoop() {
   sourceNode = loopSource;
 }
 
+let roll = 0;
 const target = new THREE.Vector3(0, 75, 0);
 let distance = 8;
 let azimuth = THREE.Math.degToRad(270);
@@ -209,6 +212,8 @@ const angularFriction = THREE.Math.degToRad(360);
 
 let azimuthVelocity = 0;
 let elevationVelocity = 0;
+
+const modelFacingOffset = 0; // ← adjust if needed
 
 const keysPressed = {
   left: false,
@@ -234,7 +239,22 @@ function onKeyDown(event) {
     case 'ArrowUp': keysPressed.up = true; break;
     case 'ArrowDown': keysPressed.down = true; break;
     case 'Shift': keysPressed.shift = true; break;
+    case 'd':
+    case 'D':
+      heading += THREE.Math.degToRad(0.3); // Clockwise
+      roll = THREE.Math.degToRad(30); 
+      break;
+    case 'a':
+    case 'A':
+      heading -= THREE.Math.degToRad(0.3); // Counterclockwise
+      roll = THREE.Math.degToRad(-30); 
+      break;
   }
+  if (crjModel) {
+    crjModel.rotation.y = -heading + modelFacingOffset + THREE.Math.degToRad(180); // Keep plane visually pointing forward
+    crjModel.rotation.z = roll || 0;
+  } 
+  azimuth = heading - THREE.Math.degToRad(270)
 }
 
 function onKeyUp(event) {
@@ -397,7 +417,7 @@ function init() {
     (gltf) => {
       crjModel = gltf.scene;
       crjModel.position.copy(target);
-      crjModel.rotation.y = Math.PI / 2;
+      crjModel.rotation.y = heading + modelFacingOffset;  // <-- Use heading here
       crjModel.add(new THREE.AxesHelper(5));
       scene.add(crjModel);
       modelLoaded = true;
@@ -542,7 +562,9 @@ function animate(time = 0) {
 
   updateCameraPosition();
 
-  planePos.x += delta * 5;
+  const speed = 5;
+  planePos.x += Math.sin(heading) * speed * delta;
+  planePos.y += Math.cos(heading) * speed * delta;
 
   let offsetX = planePos.x / tileWorldSize;
   let offsetY = planePos.y / tileWorldSize;
