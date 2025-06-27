@@ -111,15 +111,22 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.125.2/examples/js/loaders/GLTFLoader.js"></script>
 
 <script>
-const zoom = 15;
-const tileSizePx = 256;
-const tileWorldSize = 25;
-const gridSize = 50;
+// World data
+const arcgisApiTileZoomLevel = 15; // Given to the arcgis API, determines the zoom level of map tile
+const tileSizePx = 256; // This defines the pixel size of each arcgis image pulled from the API
+const tileWorldSize = 25; // This defines the physical size of each map tile in world units (Three.js space).
+const gridSize = 50; // This defines how many tiles make up the grid in each dimension (the grid is square).
 const halfGrid = Math.floor(gridSize / 2);
 const centerOffset = tileWorldSize / 2;
 
-let baseTileX = 9645;
-let baseTileY = 12330;
+let default_locations = {
+  Manhattan: [40.7416, -73.9833],
+  LosAngeles: [34.054715, -118.248404],
+  Irvine: [33.64338819631956, -117.7492339165692]
+}
+
+let [lat, lon] = default_locations.Irvine;
+let { tileX: baseTileX, tileY: baseTileY } = latLonToTileXY(lat, lon, arcgisApiTileZoomLevel);
 let scene, camera, renderer, crjModel;
 
 let tileGrid = [];
@@ -287,6 +294,14 @@ function tryToHideLoadingScreen() {
   }
 }
 
+function latLonToTileXY(lat, lon, zoom) {
+  const latRad = lat * Math.PI / 180;
+  const n = Math.pow(2, zoom);
+  const tileX = Math.floor((lon + 180) / 360 * n);
+  const tileY = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+  return { tileX, tileY };
+}
+
 function loadTile(x, y, z, ctx, texture) {
   const url = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
   const img = new Image();
@@ -423,7 +438,7 @@ function init() {
       const tileX = baseTileX + col - halfGrid;
       const tileY = baseTileY + row - halfGrid;
 
-      loadTile(tileX, tileY, zoom, ctx, texture);
+      loadTile(tileX, tileY, arcgisApiTileZoomLevel, ctx, texture);
       tileGrid[row][col] = { mesh, ctx, texture, tileX, tileY };
     }
   }
@@ -584,7 +599,7 @@ function shiftGrid(dx, dy) {
         for (let i = 0; i < gridSize; i++) {
           const tile = oldRow[i];
           tile.tileY = newY;
-          loadTile(tile.tileX, tile.tileY, zoom, tile.ctx, tile.texture);
+          loadTile(tile.tileX, tile.tileY, arcgisApiTileZoomLevel, tile.ctx, tile.texture);
         }
         tileGrid.push(oldRow);
       } else {
@@ -593,7 +608,7 @@ function shiftGrid(dx, dy) {
         for (let i = 0; i < gridSize; i++) {
           const tile = oldRow[i];
           tile.tileY = newY;
-          loadTile(tile.tileX, tile.tileY, zoom, tile.ctx, tile.texture);
+          loadTile(tile.tileX, tile.tileY, arcgisApiTileZoomLevel, tile.ctx, tile.texture);
         }
         tileGrid.unshift(oldRow);
       }
@@ -606,12 +621,12 @@ function shiftGrid(dx, dy) {
         if (dx > 0) {
           const tile = row.shift();
           tile.tileX = row[row.length - 1].tileX + 1;
-          loadTile(tile.tileX, tile.tileY, zoom, tile.ctx, tile.texture);
+          loadTile(tile.tileX, tile.tileY, arcgisApiTileZoomLevel, tile.ctx, tile.texture);
           row.push(tile);
         } else {
           const tile = row.pop();
           tile.tileX = row[0].tileX - 1;
-          loadTile(tile.tileX, tile.tileY, zoom, tile.ctx, tile.texture);
+          loadTile(tile.tileX, tile.tileY, arcgisApiTileZoomLevel, tile.ctx, tile.texture);
           row.unshift(tile);
         }
       }
