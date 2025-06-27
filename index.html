@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CRJ Sliding Map - Loading with Render Step</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
+    #debug {
+      position: fixed;
+      top: 10px; left: 10px;
+      color: white;
+      background: rgba(0,0,0,0.5);
+      padding: 6px 12px;
+      font-family: monospace;
+      font-size: 14px;
+      z-index: 100;
+      pointer-events: none;
+      user-select: none;
+      white-space: pre;
+    }
+    #loadingScreen {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background-color: black;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      font-family: sans-serif;
+      font-size: 20px;
+      z-index: 1000;
+    }
+
+    #loadingScreen div {
+      text-align: center;
+    }
+
+    #progressBar {
+      margin-top: 20px;
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 2px;
+      max-width: 100%;
+      overflow: hidden;
+      justify-content: center;
+    }
+
+    .bar-segment {
+      width: 6px;
+      height: 20px;
+      background-color: #444;
+    }
+
+    /* Spinner styles */
+    .loading-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 32px;
+      margin-bottom: 16px;
+    }
+
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 4px solid white;
+      border-top: 4px solid transparent;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    #startImage {
+      width: 200px;
+      height: auto;
+      opacity: 0.8;
+      transition: opacity 0.2s;
+      cursor: pointer;
+    }
+
+    #startImage:hover {
+      opacity: 1.0;
+    }
+
+    #startImage:active {
+      opacity: 0.5;
+    }
+  </style>
+</head>
+<body>
+<div id="debug"></div>
+
+<div id="loadingScreen">
+  <div class="loading-header">
+    <div class="spinner"></div>
+    <div>Loading...</div>
+  </div>
+  <div id="loadingText">Loading map tile 1 of 50</div>
+  <div id="progressBar"></div>
+  <img id="startImage" src="start.webp" style="display:none;" alt="Click to Start">
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.125.2/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.125.2/examples/js/loaders/GLTFLoader.js"></script>
+
+<script>
+const zoom = 15;
+const tileSizePx = 256;
+const tileWorldSize = 25;
+const gridSize = 50;
+const halfGrid = Math.floor(gridSize / 2);
+const centerOffset = tileWorldSize / 2;
+
+let baseTileX = 9645;
+let baseTileY = 12330;
+let scene, camera, renderer, crjModel;
+
+let tileGrid = [];
+let planePos = { x: 0, y: 0 };
+let centerTileX = baseTileX;
+let centerTileY = baseTileY;
+let debugEl;
+
+const totalTilesToTrack = 50;  // first 50 tiles to load and render
+
+let tilesLoaded = 0;
+let tilesRendered = 0;
+let modelLoaded = false;
+
+window.addEventListener('load', () => {
+  windowHasLoaded = true;
+  tryToHideLoadingScreen();
+});
+
+let windowHasLoaded = false;
+
+const loadingScreen = document.getElementById('loadingScreen');
+const loadingText = document.getElementById('loadingText');
+const progressBar = document.getElementById('progressBar');
+
+// Create 101 bar segments: 50 load + 50 render + 1 model
+for (let i = 0; i < 101; i++) {
+  const segment = document.createElement('div');
+  segment.className = 'bar-segment';
+  progressBar.appendChild(segment);
+}
+
+const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+let audioBuffer;
+let sourceNode;
+let loopStart = 32.0030; // A point in seconds
+let loopEnd = 223.9985;   // B point in seconds
+
+async function loadAudio() {
+  const response = await fetch('./lofi.mp3');
+  const arrayBuffer = await response.arrayBuffer();
+  audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+}
+
+function playIntroAndLoop() {
+  const now = audioContext.currentTime;
+
+  // 1. Play the intro from time 0
+  const introSource = audioContext.createBufferSource();
+  introSource.buffer = audioBuffer;
+  introSource.connect(audioContext.destination);
+
+  // Play from 0 to B point
+  const durationToLoop = loopEnd;
+  introSource.start(now, 0, durationToLoop);
+
+  // 2. Schedule the seamless loop to start when the intro ends
+  const loopSource = audioContext.createBufferSource();
+  loopSource.buffer = audioBuffer;
+  loopSource.loop = true;
+  loopSource.loopStart = loopStart;
+  loopSource.loopEnd = loopEnd;
+  loopSource.connect(audioContext.destination);
+  loopSource.start(now + durationToLoop, loopStart);
+
+  // Keep a reference to stop later if needed
+  sourceNode = loopSource;
+}
+
+const target = new THREE.Vector3(0, 75, 0);
+let distance = 8;
+let azimuth = THREE.Math.degToRad(270);
+let elevation = THREE.Math.degToRad(8);
+const elevationMin = THREE.Math.degToRad(1);
+const elevationMax = THREE.Math.degToRad(89);
+
+const maxAngularSpeed = THREE.Math.degToRad(90);
+const angularAcceleration = THREE.Math.degToRad(180);
+const angularFriction = THREE.Math.degToRad(360);
+
+let azimuthVelocity = 0;
+let elevationVelocity = 0;
+
+const keysPressed = {
+  left: false,
+  right: false,
+  up: false,
+  down: false,
+  shift: false
+};
+
+function updateCameraPosition() {
+  const x = distance * Math.cos(elevation) * Math.cos(azimuth);
+  const y = distance * Math.sin(elevation);
+  const z = distance * Math.cos(elevation) * Math.sin(azimuth);
+  camera.position.set(target.x + x, target.y + y, target.z + z);
+  camera.up.set(0, 1, 0);
+  camera.lookAt(target);
+}
+
+function onKeyDown(event) {
+  switch(event.key) {
+    case 'ArrowLeft': keysPressed.left = true; break;
+    case 'ArrowRight': keysPressed.right = true; break;
+    case 'ArrowUp': keysPressed.up = true; break;
+    case 'ArrowDown': keysPressed.down = true; break;
+    case 'Shift': keysPressed.shift = true; break;
+  }
+}
+
+function onKeyUp(event) {
+  switch(event.key) {
+    case 'ArrowLeft': keysPressed.left = false; break;
+    case 'ArrowRight': keysPressed.right = false; break;
+    case 'ArrowUp': keysPressed.up = false; break;
+    case 'ArrowDown': keysPressed.down = false; break;
+    case 'Shift': keysPressed.shift = false; break;
+  }
+}
+
+function updateLoadingProgress() {
+  const totalLoadedSteps = tilesLoaded + tilesRendered + (modelLoaded ? 1 : 0);
+  const segments = progressBar.children;
+
+  // Fill segments white for progress, #444 for not done
+  for (let i = 0; i < segments.length; i++) {
+    segments[i].style.backgroundColor = (i < totalLoadedSteps) ? 'white' : '#444';
+  }
+
+  // Update loading text based on phase
+  if (tilesLoaded < totalTilesToTrack) {
+    loadingText.textContent = `Loading map tile ${tilesLoaded + 1} of ${totalTilesToTrack}`;
+  } else if (tilesRendered < totalTilesToTrack) {
+    loadingText.textContent = `Rendering map tile ${tilesRendered + 1} of ${totalTilesToTrack}`;
+  } else if (!modelLoaded) {
+    loadingText.textContent = "Loading the CRJ Model";
+  }
+}
+
+// Hide loading screen only when all done
+function tryToHideLoadingScreen() {
+  if (
+    tilesLoaded >= totalTilesToTrack &&
+    tilesRendered >= totalTilesToTrack &&
+    modelLoaded &&
+    windowHasLoaded
+  ) {
+    // Hide loading text and spinner
+    document.querySelector('.loading-header').style.display = 'none';
+    loadingText.style.display = 'none';
+    progressBar.style.display = 'none';
+
+    // Show the start image
+    const startImage = document.getElementById('startImage');
+    startImage.style.display = 'block';
+
+    // Add mouse interaction
+    startImage.addEventListener('mouseup', () => {
+      setTimeout(() => {
+        // Hide loading screen after 0.2 seconds
+        loadingScreen.style.display = 'none';
+        playIntroAndLoop();
+      }, 200);
+    });
+  }
+}
+
+function loadTile(x, y, z, ctx, texture) {
+  const url = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.src = url;
+  img.onload = () => {
+    ctx.clearRect(0, 0, tileSizePx, tileSizePx);
+    ctx.drawImage(img, 0, 0, tileSizePx, tileSizePx);
+    texture.needsUpdate = true;
+    if (tilesLoaded < totalTilesToTrack) {
+      tilesLoaded++;
+      updateLoadingProgress();
+      tryToHideLoadingScreen();
+      if (tilesLoaded === totalTilesToTrack) {
+        startRenderingPhase();
+      }
+    }
+  };
+  img.onerror = () => {
+    ctx.clearRect(0, 0, tileSizePx, tileSizePx);
+    ctx.fillStyle = 'blue';
+    ctx.fillRect(0, 0, tileSizePx, tileSizePx);
+    texture.needsUpdate = true;
+    if (tilesLoaded < totalTilesToTrack) {
+      tilesLoaded++;
+      updateLoadingProgress();
+      tryToHideLoadingScreen();
+      if (tilesLoaded === totalTilesToTrack) {
+        startRenderingPhase();
+      }
+    }
+  };
+}
+
+function startRenderingPhase() {
+  tilesRendered = 0;
+  renderNextTile(0);
+}
+
+function renderNextTile(index) {
+  if (index >= totalTilesToTrack) {
+    updateLoadingProgress();
+    tryToHideLoadingScreen();
+    return;
+  }
+
+  const row = Math.floor(index / gridSize);
+  const col = index % gridSize;
+
+  if (!tileGrid[row] || !tileGrid[row][col]) {
+    tilesRendered++;
+    updateLoadingProgress();
+    tryToHideLoadingScreen();
+    renderNextTile(index + 1);
+    return;
+  }
+
+  const tile = tileGrid[row][col];
+  tile.mesh.position.set(
+    (tile.tileX - centerTileX) * tileWorldSize + centerOffset,
+    0,
+    (tile.tileY - centerTileY) * tileWorldSize + centerOffset
+  );
+
+  tilesRendered++;
+  updateLoadingProgress();
+  tryToHideLoadingScreen();
+
+  setTimeout(() => renderNextTile(index + 1), 10);
+}
+
+function init() {
+  debugEl = document.getElementById('debug');
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xa0c6ff);
+
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  updateCameraPosition();
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+  dirLight.position.set(10, 10, 10);
+  scene.add(dirLight);
+
+  const loader = new THREE.GLTFLoader();
+  loader.load(
+    './crj.glb',
+    (gltf) => {
+      crjModel = gltf.scene;
+      crjModel.position.copy(target);
+      crjModel.add(new THREE.AxesHelper(5));
+      scene.add(crjModel);
+      modelLoaded = true;
+      updateLoadingProgress();
+      tryToHideLoadingScreen();
+    },
+    () => {
+      loadingText.textContent = "Loading the CRJ Model";
+    },
+    (error) => {
+      console.error('Model load failed:', error);
+      modelLoaded = true;
+      updateLoadingProgress();
+      tryToHideLoadingScreen();
+    }
+  );
+
+  for (let row = 0; row < gridSize; row++) {
+    tileGrid[row] = [];
+    for (let col = 0; col < gridSize; col++) {
+      const canvas = document.createElement('canvas');
+      canvas.width = tileSizePx;
+      canvas.height = tileSizePx;
+      const ctx = canvas.getContext('2d');
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+
+      const mat = new THREE.MeshStandardMaterial({ map: texture, side: THREE.DoubleSide });
+      const geo = new THREE.PlaneGeometry(tileWorldSize, tileWorldSize);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+
+      // Initially hide tiles offscreen:
+      mesh.position.set(0, -1000, 0);
+
+      scene.add(mesh);
+
+      const tileX = baseTileX + col - halfGrid;
+      const tileY = baseTileY + row - halfGrid;
+
+      loadTile(tileX, tileY, zoom, ctx, texture);
+      tileGrid[row][col] = { mesh, ctx, texture, tileX, tileY };
+    }
+  }
+
+  addEdgeHazePlane();
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+}
+
+function addEdgeHazePlane() {
+  const hazeSize = gridSize * tileWorldSize + 30;
+  const hazeCanvas = document.createElement('canvas');
+  const hazePxSize = 1024;
+  hazeCanvas.width = hazePxSize;
+  hazeCanvas.height = hazePxSize;
+  const ctx = hazeCanvas.getContext('2d');
+
+  const grad = ctx.createRadialGradient(hazePxSize/2, hazePxSize/2, hazePxSize*0.35, hazePxSize/2, hazePxSize/2, hazePxSize/2);
+  grad.addColorStop(0, 'rgba(255,255,255,0)');
+  grad.addColorStop(0.7, 'rgba(255,255,255,0.3)');
+  grad.addColorStop(1, 'rgba(255,255,255,0.8)');
+
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, hazePxSize, hazePxSize);
+
+  const hazeTexture = new THREE.CanvasTexture(hazeCanvas);
+  hazeTexture.minFilter = THREE.LinearFilter;
+  hazeTexture.magFilter = THREE.LinearFilter;
+
+  const hazeMaterial = new THREE.MeshBasicMaterial({
+    map: hazeTexture,
+    transparent: true,
+    depthWrite: false,
+    opacity: 0.5,
+    side: THREE.DoubleSide,
+  });
+
+  const hazeGeometry = new THREE.PlaneGeometry(hazeSize, hazeSize);
+  const hazeMesh = new THREE.Mesh(hazeGeometry, hazeMaterial);
+  hazeMesh.rotation.x = -Math.PI / 2;
+  hazeMesh.position.set(centerOffset, 0.1, centerOffset);
+  scene.add(hazeMesh);
+}
+
+function animate(time = 0) {
+  requestAnimationFrame(animate);
+  const delta = time ? (time - (animate.lastTime || time)) / 1000 : 0;
+  animate.lastTime = time;
+
+  if (keysPressed.left) {
+    azimuthVelocity -= angularAcceleration * delta;
+  } else if (keysPressed.right) {
+    azimuthVelocity += angularAcceleration * delta;
+  } else {
+    if (azimuthVelocity > 0) {
+      azimuthVelocity -= angularFriction * delta;
+      if (azimuthVelocity < 0) azimuthVelocity = 0;
+    } else if (azimuthVelocity < 0) {
+      azimuthVelocity += angularFriction * delta;
+      if (azimuthVelocity > 0) azimuthVelocity = 0;
+    }
+  }
+  azimuthVelocity = THREE.Math.clamp(azimuthVelocity, -maxAngularSpeed, maxAngularSpeed);
+
+  if (keysPressed.up) {
+    if (keysPressed.shift) {
+      distance += 15 * delta;
+      distance = THREE.Math.clamp(distance, 5, 100);
+    } else {
+      elevationVelocity += angularAcceleration * delta;
+    }
+  } else if (keysPressed.down) {
+    if (keysPressed.shift) {
+      distance -= 15 * delta;
+      distance = THREE.Math.clamp(distance, 5, 100);
+    } else {
+      elevationVelocity -= angularAcceleration * delta;
+    }
+  } else {
+    if (elevationVelocity > 0) {
+      elevationVelocity -= angularFriction * delta;
+      if (elevationVelocity < 0) elevationVelocity = 0;
+    } else if (elevationVelocity < 0) {
+      elevationVelocity += angularFriction * delta;
+      if (elevationVelocity > 0) elevationVelocity = 0;
+    }
+  }
+  elevationVelocity = THREE.Math.clamp(elevationVelocity, -maxAngularSpeed, maxAngularSpeed);
+
+  azimuth += azimuthVelocity * delta;
+  elevation += elevationVelocity * delta;
+  elevation = THREE.Math.clamp(elevation, elevationMin, elevationMax);
+
+  updateCameraPosition();
+
+  planePos.y += delta * 5;
+
+  let offsetX = planePos.x / tileWorldSize;
+  let offsetY = planePos.y / tileWorldSize;
+
+  let shiftX = 0;
+  let shiftY = 0;
+
+  if (offsetX <= -1 || offsetX >= 1) {
+    shiftX = Math.trunc(offsetX);
+    planePos.x -= shiftX * tileWorldSize;
+    offsetX -= shiftX;
+  }
+  if (offsetY <= -1 || offsetY >= 1) {
+    shiftY = Math.trunc(offsetY);
+    planePos.y -= shiftY * tileWorldSize;
+    offsetY -= shiftY;
+  }
+
+  if (shiftX !== 0 || shiftY !== 0) {
+    centerTileX += shiftX;
+    centerTileY += shiftY;
+    shiftGrid(shiftX, shiftY);
+  }
+
+  // Only update tile positions dynamically after rendering phase finished
+  if (tilesRendered >= totalTilesToTrack) {
+    for (let row = 0; row < gridSize; row++) {
+      for (let col = 0; col < gridSize; col++) {
+        const tile = tileGrid[row][col];
+        const x = (tile.tileX - centerTileX - offsetX) * tileWorldSize + centerOffset;
+        const z = (tile.tileY - centerTileY - offsetY) * tileWorldSize + centerOffset;
+        tile.mesh.position.set(x, 0, z);
+      }
+    }
+  }
+
+  renderer.render(scene, camera);
+
+  debugEl.textContent =
+    `Plane Pos: x=${planePos.x.toFixed(2)}, y=${planePos.y.toFixed(2)}\n` +
+    `Center Tile: x=${centerTileX}, y=${centerTileY}\n` +
+    `OffsetX: ${offsetX.toFixed(2)}, OffsetY: ${offsetY.toFixed(2)}\n` +
+    `ShiftX: ${shiftX}, ShiftY: ${shiftY}\n` +
+    `Distance: ${distance.toFixed(2)}\n` +
+    `Azimuth: ${(THREE.Math.radToDeg(azimuth) % 360).toFixed(1)}°\n` +
+    `Elevation: ${(THREE.Math.radToDeg(elevation)).toFixed(1)}°`;
+}
+
+function shiftGrid(dx, dy) {
+  if (dy !== 0) {
+    for (let step = 0; step < Math.abs(dy); step++) {
+      if (dy > 0) {
+        const oldRow = tileGrid.shift();
+        const newY = tileGrid[tileGrid.length - 1][0].tileY + 1;
+        for (let i = 0; i < gridSize; i++) {
+          const tile = oldRow[i];
+          tile.tileY = newY;
+          loadTile(tile.tileX, tile.tileY, zoom, tile.ctx, tile.texture);
+        }
+        tileGrid.push(oldRow);
+      } else {
+        const oldRow = tileGrid.pop();
+        const newY = tileGrid[0][0].tileY - 1;
+        for (let i = 0; i < gridSize; i++) {
+          const tile = oldRow[i];
+          tile.tileY = newY;
+          loadTile(tile.tileX, tile.tileY, zoom, tile.ctx, tile.texture);
+        }
+        tileGrid.unshift(oldRow);
+      }
+    }
+  }
+
+  if (dx !== 0) {
+    for (let step = 0; step < Math.abs(dx); step++) {
+      for (let row of tileGrid) {
+        if (dx > 0) {
+          const tile = row.shift();
+          tile.tileX = row[row.length - 1].tileX + 1;
+          loadTile(tile.tileX, tile.tileY, zoom, tile.ctx, tile.texture);
+          row.push(tile);
+        } else {
+          const tile = row.pop();
+          tile.tileX = row[0].tileX - 1;
+          loadTile(tile.tileX, tile.tileY, zoom, tile.ctx, tile.texture);
+          row.unshift(tile);
+        }
+      }
+    }
+  }
+}
+
+    
+loadAudio();
+init();
+animate();
+
+</script>
+</body>
+</html>
