@@ -115,12 +115,12 @@
 const arcgisApiTileZoomLevel = 12; // Given to the arcgis API, determines the zoom level of map tile
 const tileSizePx = 256; // This defines the pixel size of each arcgis image pulled from the API
 const tileLengthWidth = 25; // This defines the physical size of each map tile in world units (Three.js space).
-const gridLenghtWidthRequest = 9; // This defines how many tiles make up the grid in each dimension (the grid is square).
+const gridLenghtWidthRequest = 30; // This defines how many tiles make up the grid in each dimension (the grid is square).
 const gridLengthWidth = gridLenghtWidthRequest % 2 === 0 ? gridLenghtWidthRequest + 1 : gridLenghtWidthRequest; // forces the grid to have a center tile
 const halfGrid = Math.floor(gridLengthWidth / 2);
 const centerOffset = tileLengthWidth / 2;
 
-const gridSpeed = 10;
+const gridSpeed = 6;
 
 let default_locations = {
   Manhattan: [40.7416, -73.9833],
@@ -204,7 +204,7 @@ function playIntroAndLoop() {
 let roll = 0;
 const target = new THREE.Vector3(0, 75, 0);
 let distance = 8;
-let azimuth = THREE.Math.degToRad(270);
+let azimuth = THREE.Math.degToRad(90);
 let elevation = THREE.Math.degToRad(8);
 const elevationMin = THREE.Math.degToRad(1);
 const elevationMax = THREE.Math.degToRad(89);
@@ -623,13 +623,13 @@ function animate(time = 0) {
   elevationVelocity = THREE.Math.clamp(elevationVelocity, -maxAngularSpeed, maxAngularSpeed);
 
   if (keysPressed.d) {
-    //heading += THREE.Math.degToRad(1);
     roll += THREE.Math.degToRad(0.05); 
   }
   if (keysPressed.a) {
-    //heading -= THREE.Math.degToRad(1);
     roll -= THREE.Math.degToRad(0.05); 
   }
+
+  heading += THREE.Math.degToRad(roll * 0.03);
 
   azimuth += azimuthVelocity * delta;
   elevation += elevationVelocity * delta;
