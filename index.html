@@ -9,17 +9,57 @@
     canvas { display: block; }
     #debug {
       position: fixed;
-      top: 10px; left: 10px;
+      top: 10px;
+      left: 10px;
       color: white;
-      background: rgba(0,0,0,0.5);
-      padding: 6px 12px;
+      background: rgba(0,0,0,0.7);
+      padding: 10px 14px;
       font-family: monospace;
       font-size: 14px;
       z-index: 100;
-      pointer-events: none;
       user-select: none;
-      white-space: pre;
+      white-space: normal;  /* Allow wrapping if needed */
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-width: 280px;
+      border-radius: 6px;
+      box-shadow: 0 0 8px rgba(255, 255, 255, 0.2);
     }
+
+    #debugRealtimeInfo {
+      max-height: 140px;  /* Limit height */
+      overflow-y: auto;
+      padding-right: 6px; /* For scrollbar space */
+      line-height: 1.3;
+      white-space: pre-wrap; /* allow wrapping with line breaks */
+    }
+
+    #debugOptions {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 0;
+      padding: 0;
+    }
+
+    #debugOptions label {
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      user-select: text;
+    }
+
+    #debugOptions input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+      margin: 0;
+      padding: 0;
+    }
+
     #loadingScreen {
       position: fixed;
       top: 0; left: 0;
@@ -95,7 +135,13 @@
   </style>
 </head>
 <body>
-<div id="debug"></div>
+<div id="debug">
+  <div id="debugRealtimeInfo"></div>
+  <div id="debugOptions">
+    <label><input type="checkbox" id="gridDebug">Grid Debug</label>
+    <label><input type="checkbox" id="axesHelpers">Axes Helpers</label>
+  </div>
+</div>
 
 <div id="loadingScreen">
   <div class="loading-header">
@@ -111,11 +157,16 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.125.2/examples/js/loaders/GLTFLoader.js"></script>
 
 <script>
+
+let debugOptions = {
+  showDebugPanel: true,
+}
+
 // World data
 const arcgisApiTileZoomLevel = 12; // Given to the arcgis API, determines the zoom level of map tile
 const tileSizePx = 256; // This defines the pixel size of each arcgis image pulled from the API
 const tileLengthWidth = 25; // This defines the physical size of each map tile in world units (Three.js space).
-const gridLenghtWidthRequest = 30; // This defines how many tiles make up the grid in each dimension (the grid is square).
+const gridLenghtWidthRequest = 10; // This defines how many tiles make up the grid in each dimension (the grid is square).
 const gridLengthWidth = gridLenghtWidthRequest % 2 === 0 ? gridLenghtWidthRequest + 1 : gridLenghtWidthRequest; // forces the grid to have a center tile
 const halfGrid = Math.floor(gridLengthWidth / 2);
 const centerOffset = tileLengthWidth / 2;
@@ -138,7 +189,8 @@ let tileGrid = [];
 let planePos = { x: tileLengthWidth / 2, y: tileLengthWidth / 2 };
 let centerTileX = baseTileX;
 let centerTileY = baseTileY;
-let debugEl;
+let debugRealtimeInfoEl;
+let debugOptionsEl;
 
 const totalTilesToTrack = gridLenghtWidthRequest ** 2;  // first 50 tiles to load and render
 
@@ -152,6 +204,15 @@ window.addEventListener('load', () => {
 });
 
 let windowHasLoaded = false;
+
+document.getElementById('gridDebug').addEventListener('change', () => {
+  for (let row = 0; row < gridLengthWidth; row++) {
+    for (let col = 0; col < gridLengthWidth; col++) {
+      const tile = tileGrid[row][col];
+      loadTile(tile.tileX, tile.tileY, arcgisApiTileZoomLevel, tile.ctx, tile.texture, tile);
+    }
+  }
+});
 
 const loadingScreen = document.getElementById('loadingScreen');
 const loadingText = document.getElementById('loadingText');
@@ -217,6 +278,9 @@ let azimuthVelocity = 0;
 let elevationVelocity = 0;
 
 const modelFacingOffset = 0; // ← adjust if needed
+
+let worldAxes;
+let planeAxes;
 
 const keysPressed = {
   left: false,
@@ -337,27 +401,26 @@ function loadTile(x, y, z, ctx, texture, tile = null) {
     ctx.clearRect(0, 0, tileSizePx, tileSizePx);
     ctx.drawImage(img, 0, 0, tileSizePx, tileSizePx);
 
-    // Mirror text horizontally
-    ctx.save();
-    ctx.translate(tileSizePx / 2, tileSizePx / 2);
-    ctx.scale(-1, 1); // horizontal flip
-    ctx.font = 'bold 30px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'white';
-    ctx.strokeStyle = 'black';
-    ctx.lineWidth = 4;
-    const label1 = `x=${x}, y=${y}`;
-    const label2 = `row=${tile.row}, col=${tile.col}`;
+    const showLabels = document.getElementById('gridDebug')?.checked;
 
-    // First line (centered vertically a bit higher)
-    ctx.strokeText(label1, 0, -10);
-    ctx.fillText(label1, 0, -10);
-
-    // Second line (slightly below the first)
-    ctx.strokeText(label2, 0, +10);
-    ctx.fillText(label2, 0, +10);
-    ctx.restore();
+    if (showLabels) {
+      ctx.save();
+      ctx.translate(tileSizePx / 2, tileSizePx / 2);
+      ctx.scale(-1, 1); // horizontal flip
+      ctx.font = 'bold 30px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'white';
+      ctx.strokeStyle = 'black';
+      ctx.lineWidth = 4;
+      const label1 = `x=${x}, y=${y}`;
+      const label2 = `row=${tile.row}, col=${tile.col}`;
+      ctx.strokeText(label1, 0, -10);
+      ctx.fillText(label1, 0, -10);
+      ctx.strokeText(label2, 0, +10);
+      ctx.fillText(label2, 0, +10);
+      ctx.restore();
+    }
 
     texture.needsUpdate = true;
 
@@ -376,20 +439,26 @@ function loadTile(x, y, z, ctx, texture, tile = null) {
     ctx.fillStyle = 'blue';
     ctx.fillRect(0, 0, tileSizePx, tileSizePx);
 
-    // Mirror text horizontally
-    ctx.save();
-    ctx.translate(tileSizePx / 2, tileSizePx / 2);
-    ctx.scale(-1, 1); // horizontal flip
-    ctx.font = 'bold 20px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'white';
-    ctx.strokeStyle = 'black';
-    ctx.lineWidth = 4;
-    const label = `(x=${x}, y=${y})`;
-    ctx.strokeText(label, 0, 0);
-    ctx.fillText(label, 0, 0);
-    ctx.restore();
+    const showLabels = document.getElementById('gridDebug')?.checked;
+
+    if (showLabels) {
+      ctx.save();
+      ctx.translate(tileSizePx / 2, tileSizePx / 2);
+      ctx.scale(-1, 1); // horizontal flip
+      ctx.font = 'bold 30px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'white';
+      ctx.strokeStyle = 'black';
+      ctx.lineWidth = 4;
+      const label1 = `x=${x}, y=${y}`;
+      const label2 = `row=${tile.row}, col=${tile.col}`;
+      ctx.strokeText(label1, 0, -10);
+      ctx.fillText(label1, 0, -10);
+      ctx.strokeText(label2, 0, +10);
+      ctx.fillText(label2, 0, +10);
+      ctx.restore();
+    }
 
     texture.needsUpdate = true;
 
@@ -442,7 +511,7 @@ function renderNextTile(index) {
 }
 
 function init() {
-  debugEl = document.getElementById('debug');
+  debugRealtimeInfoEl = document.getElementById('debugRealtimeInfo');
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xa0c6ff);
@@ -464,14 +533,37 @@ function init() {
     './crj.glb',
     (gltf) => {
       crjModel = gltf.scene;
+
+      // Create a group to hold the model
+      const planeGroup = new THREE.Group();
+
+      // Shift the model backward along local Z axis by approx the nose-to-center distance
+      // Adjust this value to your model's scale and shape — experiment with 1 to 10 units
+      crjModel.position.set(0, 0, 1.7);  // Move model forward 5 units (positive Z)
+      
+      // Add the shifted model into the group
+      planeGroup.add(crjModel);
+
+      // Position the group at the target point
+      planeGroup.position.copy(target);
+
+      // Now add the group to the scene instead of the model directly
+      scene.add(planeGroup);
+
+      // Replace crjModel reference with the group, so you can rotate/transform it normally
+      crjModel = planeGroup;
+      
       crjModel.position.copy(target);
       crjModel.rotation.y = heading + modelFacingOffset;  // <-- Use heading here
-      crjModel.add(new THREE.AxesHelper(5));
+      planeAxes = new THREE.AxesHelper(5);
+      planeAxes.visible = true; // initially hidden
+      crjModel.add(planeAxes);
       scene.add(crjModel);
       modelLoaded = true;
       // Add a static world axes helper above the model
-      const worldAxes = new THREE.AxesHelper(5);
+      worldAxes = new THREE.AxesHelper(5);
       worldAxes.position.set(target.x, target.y + 10, target.z);
+      worldAxes.visible = true; // initially hidden
       scene.add(worldAxes);
       updateLoadingProgress();
       tryToHideLoadingScreen();
@@ -521,7 +613,8 @@ function init() {
       const tile = {
         mesh, ctx, texture,
         tileX, tileY,
-        row, col // Add these
+        row, col,
+        edgeLines
       };
 
       loadTile(tileX, tileY, arcgisApiTileZoomLevel, ctx, texture, tile);
@@ -633,7 +726,7 @@ function animate(time = 0) {
     roll -= THREE.Math.degToRad(0.05); 
   }
 
-  heading += THREE.Math.degToRad(roll * 0.03);
+  heading += THREE.Math.degToRad(roll * 0.02);
 
   azimuth += azimuthVelocity * delta;
   elevation += elevationVelocity * delta;
@@ -697,15 +790,39 @@ function animate(time = 0) {
     }
   }
 
+  const axesChecked = document.getElementById('axesHelpers').checked;
+
+  if (axesChecked) {
+    if (planeAxes) planeAxes.visible = true;
+    if (worldAxes) worldAxes.visible = true;
+  } else {
+    if (planeAxes) planeAxes.visible = false;
+    if (worldAxes) worldAxes.visible = false;
+  }
+
+  const gridDebugChecked = document.getElementById('gridDebug').checked;
+
+  for (let row = 0; row < gridLengthWidth; row++) {
+    for (let col = 0; col < gridLengthWidth; col++) {
+      const tile = tileGrid[row][col];
+      if (tile.edgeLines) {
+        tile.edgeLines.visible = gridDebugChecked;
+      }
+    }
+  }
+
   renderer.render(scene, camera);
 
-  debugEl.textContent =
-    `Plane Pos: x=${planePos.x.toFixed(2)}, y=${planePos.y.toFixed(2)}\n` +
-    `Center Tile: x=${centerTileX}, y=${centerTileY}\n` +
-    `OffsetX: ${offsetX.toFixed(2)}, OffsetY: ${offsetY.toFixed(2)}\n` +
-    `Distance: ${distance.toFixed(2)}\n` +
-    `Azimuth: ${(THREE.Math.radToDeg(azimuth) % 360).toFixed(1)}°\n` +
-    `Elevation: ${(THREE.Math.radToDeg(elevation)).toFixed(1)}°`;
+  debugRealtimeInfoEl.innerHTML =
+    `Plane Pos: x=${planePos.x.toFixed(2)}, y=${planePos.y.toFixed(2)}<br>` +
+    `Center Tile: x=${centerTileX}, y=${centerTileY}<br>` +
+    `OffsetX: ${offsetX.toFixed(2)}, OffsetY: ${offsetY.toFixed(2)}<br>` +
+    `Distance: ${distance.toFixed(2)}<br>` +
+    `Azimuth: ${(THREE.Math.radToDeg(azimuth) % 360).toFixed(1)}°<br>` +
+    `Elevation: ${(THREE.Math.radToDeg(elevation)).toFixed(1)}°<br><br>`;
+
+    // gridDebugEl = document.getElementById('gridDebug');
+    // axesHelpersEl = document.getElementById('axesHelpers');
 }
 
 function shiftGrid(dx, dy) {
