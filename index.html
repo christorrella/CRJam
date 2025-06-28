@@ -120,7 +120,7 @@ const gridLengthWidth = gridLenghtWidthRequest % 2 === 0 ? gridLenghtWidthReques
 const halfGrid = Math.floor(gridLengthWidth / 2);
 const centerOffset = tileLengthWidth / 2;
 
-const gridSpeed = 6;
+const gridSpeed = 3;
 
 let default_locations = {
   Manhattan: [40.7416, -73.9833],
@@ -140,7 +140,7 @@ let centerTileX = baseTileX;
 let centerTileY = baseTileY;
 let debugEl;
 
-const totalTilesToTrack = 50;  // first 50 tiles to load and render
+const totalTilesToTrack = gridLenghtWidthRequest ** 2;  // first 50 tiles to load and render
 
 let tilesLoaded = 0;
 let tilesRendered = 0;
@@ -202,7 +202,7 @@ function playIntroAndLoop() {
 }
 
 let roll = 0;
-const target = new THREE.Vector3(0, 75, 0);
+const target = new THREE.Vector3(0, 20, 0);
 let distance = 8;
 let azimuth = THREE.Math.degToRad(90);
 let elevation = THREE.Math.degToRad(8);
@@ -469,6 +469,10 @@ function init() {
       crjModel.add(new THREE.AxesHelper(5));
       scene.add(crjModel);
       modelLoaded = true;
+      // Add a static world axes helper above the model
+      const worldAxes = new THREE.AxesHelper(5);
+      worldAxes.position.set(target.x, target.y + 10, target.z);
+      scene.add(worldAxes);
       updateLoadingProgress();
       tryToHideLoadingScreen();
     },
