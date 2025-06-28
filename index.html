@@ -112,12 +112,13 @@
 
 <script>
 // World data
-const arcgisApiTileZoomLevel = 15; // Given to the arcgis API, determines the zoom level of map tile
+const arcgisApiTileZoomLevel = 12; // Given to the arcgis API, determines the zoom level of map tile
 const tileSizePx = 256; // This defines the pixel size of each arcgis image pulled from the API
-const tileWorldSize = 25; // This defines the physical size of each map tile in world units (Three.js space).
-const gridSize = 7; // This defines how many tiles make up the grid in each dimension (the grid is square).
-const halfGrid = Math.floor(gridSize / 2);
-const centerOffset = tileWorldSize / 2;
+const tileLengthWidth = 25; // This defines the physical size of each map tile in world units (Three.js space).
+const gridLenghtWidthRequest = 9; // This defines how many tiles make up the grid in each dimension (the grid is square).
+const gridLengthWidth = gridLenghtWidthRequest % 2 === 0 ? gridLenghtWidthRequest + 1 : gridLenghtWidthRequest; // forces the grid to have a center tile
+const halfGrid = Math.floor(gridLengthWidth / 2);
+const centerOffset = tileLengthWidth / 2;
 
 const gridSpeed = 10;
 
@@ -134,7 +135,7 @@ let scene, camera, renderer, crjModel;
 let heading = THREE.Math.degToRad(90);
 
 let tileGrid = [];
-let planePos = { x: tileWorldSize / 2, y: tileWorldSize / 2 };
+let planePos = { x: tileLengthWidth / 2, y: tileLengthWidth / 2 };
 let centerTileX = baseTileX;
 let centerTileY = baseTileY;
 let debugEl;
@@ -222,13 +223,18 @@ const keysPressed = {
   right: false,
   up: false,
   down: false,
-  shift: false
+  shift: false,
+  d: false,
+  a: false
 };
 
 function updateCameraPosition() {
-  const x = distance * Math.cos(elevation) * Math.cos(azimuth);
+  const effectiveAzimuth = heading + azimuth; // Azimuth relative to heading
+
+  const x = distance * Math.cos(elevation) * Math.cos(effectiveAzimuth);
   const y = distance * Math.sin(elevation);
-  const z = distance * Math.cos(elevation) * Math.sin(azimuth);
+  const z = distance * Math.cos(elevation) * Math.sin(effectiveAzimuth);
+
   camera.position.set(target.x + x, target.y + y, target.z + z);
   camera.up.set(0, 1, 0);
   camera.lookAt(target);
@@ -241,22 +247,16 @@ function onKeyDown(event) {
     case 'ArrowUp': keysPressed.up = true; break;
     case 'ArrowDown': keysPressed.down = true; break;
     case 'Shift': keysPressed.shift = true; break;
-    case 'd':
-    case 'D':
-      heading += THREE.Math.degToRad(2); // Clockwise
-      roll = THREE.Math.degToRad(30); 
-      break;
-    case 'a':
-    case 'A':
-      heading -= THREE.Math.degToRad(2); // Counterclockwise
-      roll = THREE.Math.degToRad(-30); 
-      break;
+    case 'd': keysPressed.d = true; break;
+    case 'D':keysPressed.d = true; break;
+    case 'a': keysPressed.a = true; break;
+    case 'A': keysPressed.a = true; break;
   }
-  if (crjModel) {
-    crjModel.rotation.y = -heading + modelFacingOffset + THREE.Math.degToRad(180); // Keep plane visually pointing forward
-    crjModel.rotation.z = roll || 0;
-  } 
-  azimuth = heading - THREE.Math.degToRad(270)
+  // if (crjModel) {
+  //   crjModel.rotation.y = -heading + modelFacingOffset + THREE.Math.degToRad(180); // Keep plane visually pointing forward
+  //   crjModel.rotation.z = roll || 0;
+  // } 
+  // azimuth = heading - THREE.Math.degToRad(270)
 }
 
 function onKeyUp(event) {
@@ -266,6 +266,10 @@ function onKeyUp(event) {
     case 'ArrowUp': keysPressed.up = false; break;
     case 'ArrowDown': keysPressed.down = false; break;
     case 'Shift': keysPressed.shift = false; break;
+    case 'd': keysPressed.d = false; break;
+    case 'D':keysPressed.d = false; break;
+    case 'a': keysPressed.a = false; break;
+    case 'A': keysPressed.a = false; break;
   }
 }
 
@@ -412,8 +416,8 @@ function renderNextTile(index) {
     return;
   }
 
-  const row = Math.floor(index / gridSize);
-  const col = index % gridSize;
+  const row = Math.floor(index / gridLengthWidth);
+  const col = index % gridLengthWidth;
 
   if (!tileGrid[row] || !tileGrid[row][col]) {
     tilesRendered++;
@@ -425,9 +429,9 @@ function renderNextTile(index) {
 
   const tile = tileGrid[row][col];
   tile.mesh.position.set(
-    (tile.tileX - centerTileX) * tileWorldSize + centerOffset,
+    (tile.tileX - centerTileX) * tileLengthWidth + centerOffset,
     0,
-    (tile.tileY - centerTileY) * tileWorldSize + centerOffset
+    (tile.tileY - centerTileY) * tileLengthWidth + centerOffset
   );
 
   tilesRendered++;
@@ -479,9 +483,9 @@ function init() {
     }
   );
 
-  for (let row = 0; row < gridSize; row++) {
+  for (let row = 0; row < gridLengthWidth; row++) {
     tileGrid[row] = [];
-    for (let col = 0; col < gridSize; col++) {
+    for (let col = 0; col < gridLengthWidth; col++) {
       const canvas = document.createElement('canvas');
       canvas.width = tileSizePx;
       canvas.height = tileSizePx;
@@ -491,7 +495,7 @@ function init() {
       texture.magFilter = THREE.LinearFilter;
 
       const mat = new THREE.MeshStandardMaterial({ map: texture, side: THREE.DoubleSide });
-      const geo = new THREE.PlaneGeometry(tileWorldSize, tileWorldSize);
+      const geo = new THREE.PlaneGeometry(tileLengthWidth, tileLengthWidth);
       const mesh = new THREE.Mesh(geo, mat);
       mesh.rotation.x = Math.PI / 2;
 
@@ -534,7 +538,7 @@ function init() {
 }
 
 function addEdgeHazePlane() {
-  const hazeSize = gridSize * tileWorldSize + 30;
+  const hazeSize = (gridLengthWidth * tileLengthWidth) - tileLengthWidth;
   const hazeCanvas = document.createElement('canvas');
   const hazePxSize = 1024;
   hazeCanvas.width = hazePxSize;
@@ -564,7 +568,11 @@ function addEdgeHazePlane() {
   const hazeGeometry = new THREE.PlaneGeometry(hazeSize, hazeSize);
   const hazeMesh = new THREE.Mesh(hazeGeometry, hazeMaterial);
   hazeMesh.rotation.x = -Math.PI / 2;
-  hazeMesh.position.set(centerOffset, 0.1, centerOffset);
+  hazeMesh.position.set(
+    0,
+    0.1,
+    0
+  );
   scene.add(hazeMesh);
 }
 
@@ -614,37 +622,52 @@ function animate(time = 0) {
   }
   elevationVelocity = THREE.Math.clamp(elevationVelocity, -maxAngularSpeed, maxAngularSpeed);
 
+  if (keysPressed.d) {
+    //heading += THREE.Math.degToRad(1);
+    roll += THREE.Math.degToRad(0.05); 
+  }
+  if (keysPressed.a) {
+    //heading -= THREE.Math.degToRad(1);
+    roll -= THREE.Math.degToRad(0.05); 
+  }
+
   azimuth += azimuthVelocity * delta;
   elevation += elevationVelocity * delta;
   elevation = THREE.Math.clamp(elevation, elevationMin, elevationMax);
   updateCameraPosition();
+
+  // Update heading of the plane based on key inputs
+  if (crjModel) {
+    crjModel.rotation.y = -heading + modelFacingOffset + THREE.Math.degToRad(180); // Keep plane visually pointing forward
+    crjModel.rotation.z = roll || 0;
+  }
 
   // Move the plane
   planePos.x += Math.sin(heading) * gridSpeed * delta;
   planePos.y += Math.cos(heading) * gridSpeed * delta;
 
   // Compute offset from center of tile 13 (which is at 0,0)
-  let offsetX = planePos.x / tileWorldSize;
-  let offsetY = (planePos.y / tileWorldSize);
+  let offsetX = planePos.x / tileLengthWidth;
+  let offsetY = (planePos.y / tileLengthWidth);
 
   // Calculate offset from center of center tile in world units
   const offsetFromCenterX = planePos.x - (centerOffset);
-  const offsetFromCenterY = planePos.y - (centerOffset) + tileWorldSize;
+  const offsetFromCenterY = planePos.y - (centerOffset) + tileLengthWidth;
 
   let shiftX = 0;
   let shiftY = 0;
 
   // Check if plane has moved beyond half tile width/height in X direction
-  if (offsetFromCenterX > tileWorldSize / 2) {
+  if (offsetFromCenterX > tileLengthWidth / 2) {
     shiftX = 1;
-  } else if (offsetFromCenterX < -tileWorldSize / 2) {
+  } else if (offsetFromCenterX < -tileLengthWidth / 2) {
     shiftX = -1;
   }
 
   // Check if plane has moved beyond half tile width/height in Y direction
-  if (offsetFromCenterY > tileWorldSize / 2) {
+  if (offsetFromCenterY > tileLengthWidth / 2) {
     shiftY = 1;
-  } else if (offsetFromCenterY < -tileWorldSize / 2) {
+  } else if (offsetFromCenterY < -tileLengthWidth / 2) {
     shiftY = -1;
   }
 
@@ -653,18 +676,18 @@ function animate(time = 0) {
     centerTileX += shiftX;
     centerTileY += shiftY;
     shiftGrid(shiftX, shiftY);
-    planePos.x -= shiftX * tileWorldSize;
-    planePos.y -= shiftY * tileWorldSize;
+    planePos.x -= shiftX * tileLengthWidth;
+    planePos.y -= shiftY * tileLengthWidth;
   }
 
 
   // Only update tile positions dynamically after rendering phase finished
   if (tilesRendered >= totalTilesToTrack) {
-    for (let row = 0; row < gridSize; row++) {
-      for (let col = 0; col < gridSize; col++) {
+    for (let row = 0; row < gridLengthWidth; row++) {
+      for (let col = 0; col < gridLengthWidth; col++) {
         const tile = tileGrid[row][col];
-        const x = (tile.tileX - centerTileX - offsetX) * tileWorldSize + centerOffset;
-        const z = -(tile.tileY - centerTileY - offsetY) * tileWorldSize + centerOffset;
+        const x = (tile.tileX - centerTileX - offsetX) * tileLengthWidth + centerOffset;
+        const z = -(tile.tileY - centerTileY - offsetY) * tileLengthWidth + centerOffset;
         tile.mesh.position.set(x, 0, z);
       }
     }
@@ -687,7 +710,7 @@ function shiftGrid(dx, dy) {
       if (dy > 0) {
         const oldRow = tileGrid.shift();
         const newY = tileGrid[tileGrid.length - 1][0].tileY + 1;
-        for (let i = 0; i < gridSize; i++) {
+        for (let i = 0; i < gridLengthWidth; i++) {
           const tile = oldRow[i];
           tile.tileY = newY;
           loadTile(tile.tileX, tile.tileY, arcgisApiTileZoomLevel, tile.ctx, tile.texture, tile);
@@ -696,7 +719,7 @@ function shiftGrid(dx, dy) {
       } else {
         const oldRow = tileGrid.pop();
         const newY = tileGrid[0][0].tileY - 1;
-        for (let i = 0; i < gridSize; i++) {
+        for (let i = 0; i < gridLengthWidth; i++) {
           const tile = oldRow[i];
           tile.tileY = newY;
           loadTile(tile.tileX, tile.tileY, arcgisApiTileZoomLevel, tile.ctx, tile.texture, tile);
