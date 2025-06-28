@@ -165,7 +165,7 @@ let debugOptions = {
 // World data
 const arcgisApiTileZoomLevel = 12; // Given to the arcgis API, determines the zoom level of map tile
 const tileSizePx = 256; // This defines the pixel size of each arcgis image pulled from the API
-const tileLengthWidth = 25; // This defines the physical size of each map tile in world units (Three.js space).
+const tileLengthWidth = 50; // This defines the physical size of each map tile in world units (Three.js space).
 const gridLenghtWidthRequest = 10; // This defines how many tiles make up the grid in each dimension (the grid is square).
 const gridLengthWidth = gridLenghtWidthRequest % 2 === 0 ? gridLenghtWidthRequest + 1 : gridLenghtWidthRequest; // forces the grid to have a center tile
 const halfGrid = Math.floor(gridLengthWidth / 2);
@@ -179,7 +179,7 @@ let default_locations = {
   Irvine: [33.64338819631956, -117.7492339165692]
 }
 
-let [lat, lon] = default_locations.Irvine;
+let [lat, lon] = default_locations.Manhattan;
 let { tileX: baseTileX, tileY: baseTileY } = latLonToTileXY(lat, lon, arcgisApiTileZoomLevel);
 let scene, camera, renderer, crjModel;
 
@@ -875,5 +875,64 @@ init();
 animate();
 
 </script>
+
+<div id="touchLayer"></div>
+
+<style>
+  #touchLayer {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 50; /* Between canvas and debug */
+    background: transparent;
+    touch-action: none;
+  }
+</style>
+
+<script>
+  const touchLayer = document.getElementById('touchLayer');
+
+  let lastMidpoint = null;
+
+  touchLayer.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      lastMidpoint = getMidpoint(e.touches[0], e.touches[1]);
+    }
+  });
+
+  touchLayer.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 2 && lastMidpoint) {
+      e.preventDefault();
+      const midpoint = getMidpoint(e.touches[0], e.touches[1]);
+      const dx = midpoint.x - lastMidpoint.x;
+      const dy = midpoint.y - lastMidpoint.y;
+
+      // Sensitivity tweak: Adjust these constants as needed
+      const azimuthSpeed = 0.005;
+      const elevationSpeed = 0.005;
+
+      azimuth += dx * azimuthSpeed;
+      elevation += dy * elevationSpeed;
+      elevation = THREE.Math.clamp(elevation, elevationMin, elevationMax);
+      updateCameraPosition();
+
+      lastMidpoint = midpoint;
+    }
+  });
+
+  touchLayer.addEventListener('touchend', (e) => {
+    if (e.touches.length < 2) {
+      lastMidpoint = null;
+    }
+  });
+
+  function getMidpoint(touch1, touch2) {
+    return {
+      x: (touch1.clientX + touch2.clientX) / 2,
+      y: (touch1.clientY + touch2.clientY) / 2
+    };
+  }
+</script>
+
 </body>
 </html>
