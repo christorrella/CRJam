@@ -158,6 +158,10 @@
 
 <script>
 
+let lastFpsUpdateTime = performance.now();
+let frameCount = 0;
+let currentFps = 0;
+
 let debugOptions = {
   showDebugPanel: true,
 }
@@ -165,13 +169,13 @@ let debugOptions = {
 // World data
 const arcgisApiTileZoomLevel = 12; // Given to the arcgis API, determines the zoom level of map tile
 const tileSizePx = 256; // This defines the pixel size of each arcgis image pulled from the API
-const tileLengthWidth = 50; // This defines the physical size of each map tile in world units (Three.js space).
-const gridLenghtWidthRequest = 10; // This defines how many tiles make up the grid in each dimension (the grid is square).
+const tileLengthWidth = 25; // This defines the physical size of each map tile in world units (Three.js space).
+const gridLenghtWidthRequest = 20; // This defines how many tiles make up the grid in each dimension (the grid is square).
 const gridLengthWidth = gridLenghtWidthRequest % 2 === 0 ? gridLenghtWidthRequest + 1 : gridLenghtWidthRequest; // forces the grid to have a center tile
 const halfGrid = Math.floor(gridLengthWidth / 2);
 const centerOffset = tileLengthWidth / 2;
 
-const gridSpeed = 3;
+const gridSpeed = 1.5;
 
 let default_locations = {
   Manhattan: [40.7416, -73.9833],
@@ -179,7 +183,7 @@ let default_locations = {
   Irvine: [33.64338819631956, -117.7492339165692]
 }
 
-let [lat, lon] = default_locations.Manhattan;
+let [lat, lon] = default_locations.Irvine;
 let { tileX: baseTileX, tileY: baseTileY } = latLonToTileXY(lat, lon, arcgisApiTileZoomLevel);
 let scene, camera, renderer, crjModel;
 
@@ -678,6 +682,14 @@ function animate(time = 0) {
   const delta = time ? (time - (animate.lastTime || time)) / 1000 : 0;
   animate.lastTime = time;
 
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsUpdateTime >= 1000) {
+    currentFps = frameCount / ((now - lastFpsUpdateTime) / 1000);
+    frameCount = 0;
+    lastFpsUpdateTime = now;
+  }
+
   // Camera input handling
   if (keysPressed.left) {
     azimuthVelocity -= angularAcceleration * delta;
@@ -720,10 +732,10 @@ function animate(time = 0) {
   elevationVelocity = THREE.Math.clamp(elevationVelocity, -maxAngularSpeed, maxAngularSpeed);
 
   if (keysPressed.d) {
-    roll += THREE.Math.degToRad(0.05); 
+    roll += THREE.Math.degToRad(0.08); 
   }
   if (keysPressed.a) {
-    roll -= THREE.Math.degToRad(0.05); 
+    roll -= THREE.Math.degToRad(0.08); 
   }
 
   heading += THREE.Math.degToRad(roll * 0.02);
@@ -814,6 +826,7 @@ function animate(time = 0) {
   renderer.render(scene, camera);
 
   debugRealtimeInfoEl.innerHTML =
+    `FPS: ${currentFps.toFixed(1)}<br>` +
     `Plane Pos: x=${planePos.x.toFixed(2)}, y=${planePos.y.toFixed(2)}<br>` +
     `Center Tile: x=${centerTileX}, y=${centerTileY}<br>` +
     `OffsetX: ${offsetX.toFixed(2)}, OffsetY: ${offsetY.toFixed(2)}<br>` +

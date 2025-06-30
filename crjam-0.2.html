@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tile Map Three.js Example</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: monospace;
+      background-color: #222;
+      color: white;
+    }
+
+    #debug {
+      position: fixed;
+      top: 0;
+      left: 0;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 10;
+      white-space: pre-wrap;
+      user-select: none;
+      pointer-events: none;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    #fpsGraph {
+      display: block;
+      margin-top: 8px;
+      width: 300px;
+      height: 60px;
+      background: rgba(0, 0, 0, 0.4);
+    }
+  </style>
+</head>
+<body>
+  <div id="debug">
+    <div id="debugText"></div>
+    <canvas id="fpsGraph" width="300" height="60"></canvas>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+  <script>
+    // == Three.js setup ==
+    const scene = new THREE.Scene();
+    const skyColor = 0x70baff;
+    const groundColor = 0x996633;
+    scene.background = new THREE.Color(skyColor);
+
+    const camera = new THREE.PerspectiveCamera(
+      75,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      10000
+    );
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // == Constants and conversions ==
+    const zoom = 19;
+    const tileSize = 76.437; // meters per tile
+
+    function latLonToTileXY(lat, lon, zoom) {
+      const n = Math.pow(2, zoom);
+      const x = (lon + 180) / 360 * n;
+      const latRad = lat * Math.PI / 180;
+      const y = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n;
+      return { x, y };
+    }
+
+    function tileXYToMeters(x, y) {
+      return {
+        x: x * tileSize,
+        z: y * tileSize
+      };
+    }
+
+    // == Starting location ==
+    const startLat = 33.680556974424455;
+    const startLon = -117.86577558482;
+    const tileXY = latLonToTileXY(startLat, startLon, zoom);
+    const worldPos = tileXYToMeters(tileXY.x, tileXY.y);
+    const target = new THREE.Vector3(worldPos.x, 0, worldPos.z);
+
+    // == Tile grid settings ==
+    const tileRadius = 8; // radius 8 → 17x17 = 289 tiles
+
+    // == Create tile meshes ==
+    const tileGeometry = new THREE.PlaneGeometry(tileSize, tileSize);
+    const tiles = [];
+    const textureLoader = new THREE.TextureLoader();
+
+    const tileGroup = new THREE.Group();
+    scene.add(tileGroup);
+
+    // Removed magenta edges code
+
+    for (let dx = -tileRadius; dx <= tileRadius; dx++) {
+      for (let dz = -tileRadius; dz <= tileRadius; dz++) {
+        const mesh = new THREE.Mesh(tileGeometry, new THREE.MeshBasicMaterial({
+          color: groundColor,
+          side: THREE.DoubleSide,
+        }));
+        mesh.rotation.x = -Math.PI / 2;
+        // No wireframe added here
+
+        tileGroup.add(mesh);
+        tiles.push({ mesh, gridX: dx, gridZ: dz, tileKey: null });
+      }
+    }
+
+    // == Tile indexing ==
+    let currentBaseTileX = Math.floor(target.x / tileSize);
+    let currentBaseTileZ = Math.floor(target.z / tileSize);
+
+    let targetBaseTileX = currentBaseTileX;
+    let targetBaseTileZ = currentBaseTileZ;
+
+    // Cache for loaded textures: Map<string, THREE.Texture | null>
+    const textureCache = new Map();
+
+    // Queue for tiles to load
+    const loadQueue = [];
+
+    // Max concurrent loads to throttle textureLoader
+    const MAX_CONCURRENT_LOADS = 3;
+    let currentLoads = 0;
+
+    // To track which tiles are already enqueued or loaded (avoid duplicates)
+    const enqueuedTilesSet = new Set();
+
+    // Max number of NEW tiles to enqueue per frame to smooth load spikes
+    const MAX_NEW_ENQUEUE_PER_FRAME = 5;
+
+    // Utility to create tile key string
+    function tileKey(x, y) {
+      return `${x},${y}`;
+    }
+
+    // Enqueue tile loads for given baseX/baseZ with radius, limited per call
+    function enqueueTilesBatch(baseX, baseZ, radius, maxToEnqueue) {
+      let enqueuedThisFrame = 0;
+
+      outer:
+      for (let dx = -radius; dx <= radius; dx++) {
+        for (let dz = -radius; dz <= radius; dz++) {
+          const tileX = baseX + dx;
+          const tileY = baseZ + dz;
+          const key = tileKey(tileX, tileY);
+
+          if (!textureCache.has(key) && !enqueuedTilesSet.has(key)) {
+            loadQueue.push({ tileX, tileY, key });
+            enqueuedTilesSet.add(key);
+            enqueuedThisFrame++;
+
+            if (enqueuedThisFrame >= maxToEnqueue) break outer;
+          }
+        }
+      }
+    }
+
+    // Function to start next tile loads from queue (throttled)
+    function processLoadQueue() {
+      if (loadQueue.length === 0 || currentLoads >= MAX_CONCURRENT_LOADS) return;
+
+      while (currentLoads < MAX_CONCURRENT_LOADS && loadQueue.length > 0) {
+        const { tileX, tileY, key } = loadQueue.shift();
+
+        currentLoads++;
+        const url = `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${tileY}/${tileX}`;
+        console.log("downloading tile")
+
+        textureLoader.load(
+          url,
+          (texture) => {
+            textureCache.set(key, texture);
+            currentLoads--;
+            processLoadQueue();
+          },
+          undefined,
+          () => {
+            textureCache.set(key, null); // mark failed loads as null to avoid retrying
+            currentLoads--;
+            processLoadQueue();
+          }
+        );
+      }
+    }
+
+    // Update tile meshes positions and textures for currentBaseTileX/Z
+    function updateTilesMesh() {
+      for (const tile of tiles) {
+        const tileX = currentBaseTileX + tile.gridX;
+        const tileY = currentBaseTileZ + tile.gridZ;
+        const key = tileKey(tileX, tileY);
+
+        // Update position
+        const newX = tileX * tileSize + tileSize / 2;
+        const newZ = tileY * tileSize + tileSize / 2;
+
+        if (tile.mesh.position.x !== newX || tile.mesh.position.z !== newZ) {
+          tile.mesh.position.set(newX, 0, newZ);
+        }
+
+        // Update texture only if changed
+        if (tile.tileKey !== key) {
+          const texture = textureCache.get(key);
+          if (texture) {
+            tile.mesh.material.map = texture;
+            tile.mesh.material.color.set(0xffffff);
+          } else {
+            tile.mesh.material.map = null;
+            tile.mesh.material.color.set(groundColor);
+          }
+          tile.mesh.material.needsUpdate = true;
+          tile.tileKey = key;
+        }
+      }
+    }
+
+    // Preload tiles continuously around targetBaseTileX/Z (limited enqueue)
+    function preloadTiles() {
+      enqueueTilesBatch(targetBaseTileX, targetBaseTileZ, tileRadius, MAX_NEW_ENQUEUE_PER_FRAME);
+      processLoadQueue();
+    }
+
+    // Smooth tile movement relative to currentBaseTile
+    function positionTilesSmoothly() {
+      for (const tile of tiles) {
+        const tileX = currentBaseTileX + tile.gridX;
+        const tileZ = currentBaseTileZ + tile.gridZ;
+
+        tile.mesh.position.set(
+          tileX * tileSize + tileSize / 2,
+          0,
+          tileZ * tileSize + tileSize / 2
+        );
+      }
+    }
+
+    // == Camera and controls ==
+
+    let cameraAzimuth = 0;
+    let cameraHeight = 10;
+    let cameraDistance = 20;
+
+    const targetHelper = new THREE.AxesHelper(5);
+    scene.add(targetHelper);
+
+    const clock = new THREE.Clock();
+
+    const moveSpeed = 50;
+    const verticalSpeed = 50;
+    const turnSpeed = 200;
+    const zoomSpeed = 100;
+    const minZoom = 0;
+    const maxZoom = 10000;
+
+    let currentFPS = 0;
+    const fpsSamples = [];
+    const fpsWindowDuration = 10; // seconds
+
+    const fpsGraphCanvas = document.getElementById('fpsGraph');
+    const fpsCtx = fpsGraphCanvas.getContext('2d');
+    const fpsData = [];
+    const maxDataPoints = fpsGraphCanvas.width;
+
+    function updateFPSGraph(fps) {
+      fpsData.push(fps);
+      if (fpsData.length > maxDataPoints) fpsData.shift();
+
+      fpsCtx.fillStyle = '#000';
+      fpsCtx.fillRect(0, 0, fpsGraphCanvas.width, fpsGraphCanvas.height);
+
+      fpsCtx.strokeStyle = '#00ff00';
+      fpsCtx.beginPath();
+      for (let i = 0; i < fpsData.length; i++) {
+        const val = fpsData[i];
+        const y = fpsGraphCanvas.height - (val / 120) * fpsGraphCanvas.height;
+        if (i === 0) fpsCtx.moveTo(i, y);
+        else fpsCtx.lineTo(i, y);
+      }
+      fpsCtx.stroke();
+    }
+
+    function updateCameraPosition() {
+      const rad = THREE.MathUtils.degToRad(cameraAzimuth);
+      const camX = target.x + cameraDistance * Math.sin(rad);
+      const camZ = target.z + cameraDistance * Math.cos(rad);
+      const camY = cameraHeight;
+
+      camera.position.set(camX, camY, camZ);
+      camera.lookAt(target);
+    }
+
+    function getCardinalDirection(deg) {
+      const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+      const index = Math.round(deg / 45) % 8;
+      return directions[index];
+    }
+
+    const debugTextDiv = document.getElementById('debugText');
+
+    function updateDebug() {
+      const now = performance.now() / 1000; // seconds
+
+      fpsSamples.push({ time: now, fps: currentFPS });
+
+      while (fpsSamples.length && fpsSamples[0].time < now - fpsWindowDuration) {
+        fpsSamples.shift();
+      }
+
+      const minFPS = fpsSamples.reduce((min, sample) => Math.min(min, sample.fps), Infinity);
+
+      const height = camera.position.y.toFixed(2);
+
+      const lookVector = new THREE.Vector3()
+        .subVectors(target, camera.position)
+        .normalize();
+      const azimuth = Math.atan2(lookVector.x, -lookVector.z);
+      const azimuthDeg = ((azimuth * 180) / Math.PI + 360) % 360;
+      const cardinal = getCardinalDirection(azimuthDeg);
+
+      let verticalDir = 'Level';
+      if (camera.position.y > target.y) verticalDir = 'Down';
+      else if (camera.position.y < target.y) verticalDir = 'Up';
+
+      const targetCoords = `x=${target.x.toFixed(2)}, y=${target.y.toFixed(2)}, z=${target.z.toFixed(2)}`;
+
+      debugTextDiv.innerText = `Camera Debug
+Height: ${height} meters
+Azimuth: ${azimuthDeg.toFixed(1)}°
+Camera Looking: ${cardinal}, ${verticalDir}
+Target: ${targetCoords}
+
+Slew Speed: ${moveSpeed} m/s
+Zoom: ${cameraDistance.toFixed(1)} meters
+FPS: ${currentFPS.toFixed(0)}
+FPS Lowest (10s): ${minFPS.toFixed(0)}`;
+    }
+
+    const keys = {};
+    window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+    window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+
+    function handleInput(delta) {
+      const moveStep = moveSpeed * delta;
+      const turnStep = turnSpeed * delta;
+      const vertStep = verticalSpeed * delta;
+      const zoomStep = zoomSpeed * delta;
+
+      if (keys['arrowup']) {
+        if (keys['shift']) target.y += vertStep;
+        else target.z -= moveStep;
+      }
+      if (keys['arrowdown']) {
+        if (keys['shift']) target.y -= vertStep;
+        else target.z += moveStep;
+      }
+      if (keys['arrowleft']) target.x -= moveStep;
+      if (keys['arrowright']) target.x += moveStep;
+      if (keys['a']) cameraAzimuth -= turnStep;
+      if (keys['d']) cameraAzimuth += turnStep;
+      if (keys['w']) cameraHeight += vertStep;
+      if (keys['s']) cameraHeight -= vertStep;
+      if (keys['q']) cameraDistance = Math.max(minZoom, cameraDistance - zoomStep);
+      if (keys['e']) cameraDistance = Math.min(maxZoom, cameraDistance + zoomStep);
+
+      updateCameraPosition();
+    }
+
+    // == Main animation loop ==
+    function animate() {
+      requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+      currentFPS = 1 / delta;
+
+      handleInput(delta);
+
+      // Compute current target tile indices
+      const newBaseTileX = Math.floor(target.x / tileSize);
+      const newBaseTileZ = Math.floor(target.z / tileSize);
+
+      // If target moved into a new tile, reset enqueued tiles set to start new batch
+      if (newBaseTileX !== targetBaseTileX || newBaseTileZ !== targetBaseTileZ) {
+        targetBaseTileX = newBaseTileX;
+        targetBaseTileZ = newBaseTileZ;
+        enqueuedTilesSet.clear();
+      }
+
+      // Enqueue a small batch of new tiles per frame and process load queue
+      preloadTiles();
+
+      // When no loads active and targetBase differs, update currentBaseTile and tile meshes
+      if ((currentBaseTileX !== targetBaseTileX || currentBaseTileZ !== targetBaseTileZ) && currentLoads === 0) {
+        currentBaseTileX = targetBaseTileX;
+        currentBaseTileZ = targetBaseTileZ;
+        updateTilesMesh();
+      }
+
+      positionTilesSmoothly();
+
+      updateDebug();
+      updateFPSGraph(currentFPS);
+      targetHelper.position.copy(target);
+      renderer.render(scene, camera);
+    }
+
+    // Initialize: preload tiles at starting location and update meshes
+    preloadTiles();
+    animate();
+
+    // == Resize handler ==
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Initial camera position
+    updateCameraPosition();
+  </script>
+</body>
+</html>
