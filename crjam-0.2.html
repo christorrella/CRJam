@@ -47,7 +47,7 @@
     // == Three.js setup ==
     const scene = new THREE.Scene();
     const skyColor = 0x70baff;
-    const groundColor = 0x996633;
+    const groundColor = skyColor;
     scene.background = new THREE.Color(skyColor);
 
     const camera = new THREE.PerspectiveCamera(
@@ -56,13 +56,16 @@
       0.1,
       10000
     );
+    const frustum = new THREE.Frustum();
+    const cameraViewProjectionMatrix = new THREE.Matrix4();
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
     // == Constants and conversions ==
-    const zoom = 19;
-    const tileSize = 76.437; // meters per tile
+    const zoom = 15;
+    const earthCircumference = 40075016.68557849;
+    const tileSize = earthCircumference / Math.pow(2, zoom);
 
     function latLonToTileXY(lat, lon, zoom) {
       const n = Math.pow(2, zoom);
@@ -87,7 +90,7 @@
     const target = new THREE.Vector3(worldPos.x, 0, worldPos.z);
 
     // == Tile grid settings ==
-    const tileRadius = 8; // radius 8 → 17x17 = 289 tiles
+    const tileRadius = 10; // radius 8 → 17x17 = 289 tiles
 
     // == Create tile meshes ==
     const tileGeometry = new THREE.PlaneGeometry(tileSize, tileSize);
@@ -143,25 +146,44 @@
 
     // Enqueue tile loads for given baseX/baseZ with radius, limited per call
     function enqueueTilesBatch(baseX, baseZ, radius, maxToEnqueue) {
-      let enqueuedThisFrame = 0;
+        let candidates = [];
 
-      outer:
-      for (let dx = -radius; dx <= radius; dx++) {
-        for (let dz = -radius; dz <= radius; dz++) {
-          const tileX = baseX + dx;
-          const tileY = baseZ + dz;
-          const key = tileKey(tileX, tileY);
+        for (let dx = -radius; dx <= radius; dx++) {
+            for (let dz = -radius; dz <= radius; dz++) {
+            const tileX = baseX + dx;
+            const tileY = baseZ + dz;
+            const key = tileKey(tileX, tileY);
 
-          if (!textureCache.has(key) && !enqueuedTilesSet.has(key)) {
-            loadQueue.push({ tileX, tileY, key });
-            enqueuedTilesSet.add(key);
-            enqueuedThisFrame++;
+            if (!textureCache.has(key) && !enqueuedTilesSet.has(key)) {
+                const pos = new THREE.Vector3(
+                tileX * tileSize + tileSize / 2,
+                0,
+                tileY * tileSize + tileSize / 2
+                );
+                const mesh = new THREE.Mesh(tileGeometry);
+                mesh.position.copy(pos);
+                mesh.rotation.x = -Math.PI / 2;
 
-            if (enqueuedThisFrame >= maxToEnqueue) break outer;
-          }
+                // Check visibility
+                const isVisible = frustum.intersectsObject(mesh);
+
+                candidates.push({ tileX, tileY, key, isVisible });
+            }
+            }
         }
-      }
-    }
+
+        // Prioritize visible tiles
+        candidates.sort((a, b) => b.isVisible - a.isVisible);
+
+        let enqueuedThisFrame = 0;
+        for (const candidate of candidates) {
+            if (enqueuedThisFrame >= maxToEnqueue) break;
+            loadQueue.push(candidate);
+            enqueuedTilesSet.add(candidate.key);
+            enqueuedThisFrame++;
+        }
+        }
+
 
     // Function to start next tile loads from queue (throttled)
     function processLoadQueue() {
@@ -170,25 +192,47 @@
       while (currentLoads < MAX_CONCURRENT_LOADS && loadQueue.length > 0) {
         const { tileX, tileY, key } = loadQueue.shift();
 
+        // Skip tiles now outside the active radius
+        const dx = tileX - targetBaseTileX;
+        const dy = tileY - targetBaseTileZ;
+        if (Math.abs(dx) > tileRadius || Math.abs(dy) > tileRadius) {
+            enqueuedTilesSet.delete(key); // Allow it to be enqueued again later
+            continue;
+        }
+
         currentLoads++;
         const url = `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${tileY}/${tileX}`;
-        console.log("downloading tile")
+        console.log("downloading tile", key);
 
         textureLoader.load(
-          url,
-          (texture) => {
+            url,
+            (texture) => {
             textureCache.set(key, texture);
+
+            // Immediately apply texture if needed
+            for (const tile of tiles) {
+                const tx = currentBaseTileX + tile.gridX;
+                const ty = currentBaseTileZ + tile.gridZ;
+                if (tileKey(tx, ty) === key) {
+                tile.mesh.material.map = texture;
+                tile.mesh.material.color.set(0xffffff);
+                tile.mesh.material.needsUpdate = true;
+                tile.tileKey = key;
+                }
+            }
+
             currentLoads--;
             processLoadQueue();
-          },
-          undefined,
-          () => {
-            textureCache.set(key, null); // mark failed loads as null to avoid retrying
+            },
+            undefined,
+            () => {
+            textureCache.set(key, null); // mark failed
             currentLoads--;
             processLoadQueue();
-          }
+            }
         );
-      }
+        }
+
     }
 
     // Update tile meshes positions and textures for currentBaseTileX/Z
@@ -253,10 +297,10 @@
 
     const clock = new THREE.Clock();
 
-    const moveSpeed = 50;
-    const verticalSpeed = 50;
+    const moveSpeed = 90;
+    const verticalSpeed = 1000;
     const turnSpeed = 200;
-    const zoomSpeed = 100;
+    const zoomSpeed = 1000;
     const minZoom = 0;
     const maxZoom = 10000;
 
@@ -381,6 +425,14 @@ FPS Lowest (10s): ${minFPS.toFixed(0)}`;
 
       handleInput(delta);
 
+        camera.updateMatrixWorld(); // <-- required for frustum to be correct
+        cameraViewProjectionMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+        frustum.setFromProjectionMatrix(cameraViewProjectionMatrix);
+        for (const tile of tiles) {
+            tile.mesh.visible = frustum.intersectsObject(tile.mesh);
+        }
+
+
       // Compute current target tile indices
       const newBaseTileX = Math.floor(target.x / tileSize);
       const newBaseTileZ = Math.floor(target.z / tileSize);
@@ -395,12 +447,12 @@ FPS Lowest (10s): ${minFPS.toFixed(0)}`;
       // Enqueue a small batch of new tiles per frame and process load queue
       preloadTiles();
 
-      // When no loads active and targetBase differs, update currentBaseTile and tile meshes
-      if ((currentBaseTileX !== targetBaseTileX || currentBaseTileZ !== targetBaseTileZ) && currentLoads === 0) {
+      if (currentBaseTileX !== targetBaseTileX || currentBaseTileZ !== targetBaseTileZ) {
         currentBaseTileX = targetBaseTileX;
         currentBaseTileZ = targetBaseTileZ;
+        }
+
         updateTilesMesh();
-      }
 
       positionTilesSmoothly();
 
